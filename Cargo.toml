@@ -1,0 +1,20 @@
+[package]
+name = "evmghost"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+rustc-hex = "2"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+[profile.release]
+codegen-units = 1
+panic = "abort"
+
+[[bin]]
+name = "evmghost"
+path = "src/main.rs"

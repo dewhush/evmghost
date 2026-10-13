@@ -1,0 +1,19 @@
+/target
+**/*.rs.bk
+
+# editor / OS noise
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# local scratch data
+*.raw
+out/
+
+# foundry build cache
+cache/
+out/
