@@ -34,15 +34,21 @@ Two measurements, because they answer different questions.
 ### 1. Language-isolated — local `anvil` node, no rate-limiting
 
 The clean measurement: identical bytecode, identical dataset, zero network
-variance, no throttling. Seven process invocations per language, warm — the
-first run of each is discarded, since it re-parses the 3 MB signature dataset
-cold.
+variance, no throttling. Thirty process invocations per language; the first
+run of each is discarded, since it re-parses the 3 MB signature dataset cold.
 
-| Implementation | Runs | Median (ms) | Min (ms) | Max (ms) |
-|---|---|---|---|---|
-| **Rust** | 7 | **9** | 8 | 10 |
-| Go | 7 | 71 | 70 | 73 |
-| Python | 7 | 220 | 215 | 262 |
+| Implementation | Runs | Mean (ms) | StdDev | P50 | P90 | P99 | CV |
+|---|---|---|---|---|---|---|---|
+| Go | 30 | 4.4 | 0.4 | 4.4 | 5.0 | 5.4 | 8% |
+| Rust | 30 | 5.5 | 0.5 | 5.4 | 6.1 | 6.7 | 10% |
+| Python | 30 | 12.6 | 1.1 | 12.3 | 13.1 | 16.2 | 8% |
+
+Coefficient of variation sits at 8–10% for all three, so the spread is real
+rather than measurement noise. At the median the three are separated by
+under 3 ms — a human cannot tell them apart. The honest read is that **the
+`quick` pass is I/O bound and language choice does not matter for it**; the
+1.6 ms P50 gap between Go and Rust is startup and allocator overhead, and
+Python is ~3× slower purely on interpreter spin-up.
 
 ### 2. Realistic — USDC on mainnet over a public RPC
 
@@ -80,35 +86,42 @@ port, both of which would have shipped as a result.
   rest fresh. Against a local node this made the *concurrent* port 170×
   slower than Python's sequential loop: `named_views` alone was 1103 ms in Go
   versus 6.4 ms in Python. Setting `MaxIdleConnsPerHost` to the actual
-  fan-out dropped the whole Go pass to 71 ms. Lesson: **concurrency without a
-  matching connection pool is not just useless, it is actively slower than
-  doing nothing.**
+  fan-out dropped the whole Go pass to single-digit milliseconds. Lesson:
+  **concurrency without a matching connection pool is not just useless, it is
+  actively slower than doing nothing.**
 
-With both fixed, the numbers stabilise and the ranking inverts.
+With both fixed, the numbers stabilise and stop being a language contest.
 
 **The `quick` pass is ~13 RPC round trips**: `eth_getCode`, two
 `eth_getStorageAt` for proxy resolution, six named-view `eth_call`s, and five
-storage reads.
+storage reads. That round-trip count — not any language property — is the
+dominant term.
 
-- **Rust** finishes in 9 ms. The work is small and the connection pool is
-  warm; `ureq` reuses the TLS session across calls without configuration.
-  This is the number that matters for a batch sweep over hundreds of
-  addresses.
-- **Go** at 71 ms is doing the same work with the same concurrency, but pays
-  ~8× more in process startup — Go binary init plus transport setup. Fine for
-  a CLI, painful in a tight loop.
-- **Python** at 220 ms is sequential `urllib`, one round trip at a time, plus
-  interpreter startup. Consistently last, but predictably so — and the
-  variance is low, which is what you want from a reference implementation.
+- **Go and Rust land within ~1 ms of each other** at P50 (4.4 vs 5.4 ms). Go
+  edges ahead on process startup; the Rust binary carries a 5.9 MB static
+  build with codegen-units=1 and parses the signature map on every
+  invocation. Both are doing the same work over the same socket.
+- **Python is ~3× slower at the median** purely from interpreter startup and
+  sequential `urllib` — one round trip at a time, no concurrency. On a
+  network where each call costs 100 ms of latency rather than 0.5 ms, that
+  sequential strategy becomes the bottleneck and the gap widens
+  dramatically.
+- **All three are I/O bound.** The CPU-bound part — extracting selectors from
+  bytecode and hashing against a 289k-entry map — is sub-millisecond in every
+  language. The whole pass is spent waiting on the node.
 
-**So the honest ranking is: Rust ≈ 8× Go ≈ 3× Python on a clean network, and
-the spread is process startup plus connection handling — not compute.**
+**So the honest ranking is: it does not matter for this workload.** On a
+local node the three are within 3 ms of each other at P50; on a public RPC,
+rate-limiting dominates every language equally. Choose based on what happens
+*after* the pass — the Rust binary for batch sweeps over hundreds of
+addresses where connection reuse compounds, Go for a concurrent service, and
+Python when you need a reference implementation that fits on one screen.
 
 | | Local node | Public RPC |
 |---|---|---|
-| Best | Rust (~9 ms) | Rust (~2,330 ms) |
-| Worst | Python (~220 ms) | Python (timeout) |
-| Spread | 24× | ~37×+ |
+| Best | Go (~4.4 ms) | Rust (~2,330 ms) |
+| Worst | Python (~12.6 ms) | Python (timeout) |
+| Spread | ~2.9× | ~37×+ |
 
 ### The lessons that generalise
 

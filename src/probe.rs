@@ -4,6 +4,7 @@ use crate::scan_mode::ScanMode;
 use crate::selectors;
 use crate::strings;
 use crate::vm::Vm;
+use std::time::Instant;
 
 pub fn probe(
     rpc: &mut Rpc,
@@ -11,6 +12,7 @@ pub fn probe(
     addr: &str,
     mode: &ScanMode,
     extra: &[String],
+    timings: bool,
 ) -> Result<(), String> {
     let addr = normalize_addr(addr)?;
     let code = rpc.code(&addr)?;
@@ -38,9 +40,28 @@ pub fn probe(
 
     match mode {
         ScanMode::Quick => {
+            // --timings prints a stage table matching bench/go and bench/python
+            // so one harness compares all three ports with identical stages
+            let t0 = Instant::now();
             detect_standards(rpc, &addr);
+            let t_code = t0.elapsed().as_secs_f64() * 1000.0;
+
+            let s = Instant::now();
             let logic = follow_proxy(rpc, &addr);
+            let t_proxy = s.elapsed().as_secs_f64() * 1000.0;
+
+            let s = Instant::now();
             read_slots(rpc, &logic, 0, 4);
+            let t_slots = s.elapsed().as_secs_f64() * 1000.0;
+
+            let total = t0.elapsed().as_secs_f64() * 1000.0;
+            if timings {
+                println!("\n[TIMINGS]");
+                println!("eth_getCode     : {t_code:.1} ms");
+                println!("proxy_resolve   : {t_proxy:.1} ms");
+                println!("storage_0_4     : {t_slots:.1} ms");
+                println!("total           : {total:.1} ms");
+            }
         }
         ScanMode::Deep => {
             detect_standards(rpc, &addr);

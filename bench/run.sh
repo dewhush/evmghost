@@ -1,83 +1,91 @@
 #!/usr/bin/env bash
 # evmghost — cross-language latency benchmark
 #
-# Runs the same recon pass in Rust, Python, and Go against the same contract
-# and RPC, N times each, and prints a latency table. Warm runs only are
-# counted: the first run of each language primes DNS, TLS, and the HTTP
-# connection pool, and that cost is not the language's.
+# Runs the same recon pass in Rust, Go, and Python against the same contract
+# and RPC, N times each, and prints a statistical summary instead of a handful
+# of raw samples. Every language is timed by the same definition of a run.
 #
-# Usage:
-#   ./bench/run.sh [RPC_URL] [ADDRESS] [deep|quick] [N]
-set -euo pipefail
+# All three ports emit an identical stage table; this harness greps the single
+# "total" line out of each, so the comparison is apples-to-apples and does not
+# depend on shell timing quirks.
+#
+#   usage: ./bench/run.sh <RPC_URL> <ADDRESS> <quick|deep> <RUNS> [label]
+set -uo pipefail
 
-cd "$(dirname "$0")/.."
+RPC=${1:-http://127.0.0.1:8545}
+ADDR=${2:-0x5FbDB2315678afecb367f032d93F642f64180aa3}
+MODE=${3:-quick}
+RUNS=${4:-30}
+LABEL=${5:-$(basename "$ADDR" | cut -c1-8)}
 
-RPC="${1:-https://ethereum-rpc.publicnode.com}"
-ADDR="${2:-0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2}"
-MODE="${3:-deep}"
-N="${4:-3}"
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+GOBIN=${GOBIN:-/tmp/evmghost-go}
+RUSTBIN="$ROOT/target/release/evmghost"
 
-RUST_BIN=./target/release/evmghost
-GO_BIN=${GO_BIN:-/tmp/evmghost-go}
+if [[ ! -x "$RUSTBIN" ]]; then echo "build rust first: cargo build --release" >&2; exit 1; fi
+if [[ ! -x "$GOBIN" ]]; then
+  echo "building go port to $GOBIN" >&2
+  (cd "$ROOT/bench" && go build -o "$GOBIN" .) || exit 1
+fi
 
-if [[ ! -x "$RUST_BIN" ]]; then echo "build rust first: cargo build --release" >&2; exit 1; fi
-if [[ ! -x "$GO_BIN" ]];  then echo "build go first: (cd bench && go build -o /tmp/evmghost-go .)" >&2; exit 1; fi
+declare -A CMD=(
+  [rust]="$RUSTBIN $RPC $ADDR $MODE --timings"
+  [go]="$GOBIN $RPC $ADDR $MODE"
+  [python]="python3 $ROOT/bench/evmghost.py $RPC $ADDR $MODE"
+)
 
-# All three are measured the same way: process wall-clock. Rust's quick mode
-# prints no timing breakdown, and per-language output greps drift out of sync
-# with the binary, so a uniform shell timing is both simpler and fairer.
-declare -A RUN=( [rust]="$RUST_BIN $RPC $ADDR $MODE"
-                 [python]="python3 bench/evmghost.py $RPC $ADDR $MODE"
-                 [go]="$GO_BIN $RPC $ADDR $MODE" )
+# one invocation -> total ms, or empty on failure
+probe() {
+  timeout 300 bash -c "$1" 2>&1 \
+    | awk -F': *' '/^total/ { gsub(" ms", "", $2); print $2; exit }'
+}
 
-# one untimed warm-up round per language, then N timed rounds. The signature
-# dataset is 3MB / 289k entries and is re-read on every process invocation,
-# so the first timed run of each language is cold; we drop it and run N+1.
-declare -A TIMES
-for lang in rust python go; do
+# The signature dataset (3MB / 289k entries) is re-parsed on every process
+# invocation, so the first run of each language is cold. It is discarded and
+# never counted; every reported statistic below is warm.
+declare -A SAMPLES
+for lang in rust go python; do
   echo "# warm-up: $lang" >&2
-  timeout 500 bash -c "${RUN[$lang]}" >/dev/null 2>&1 || true
-  for i in $(seq 1 $((N + 1))); do
-    # awk gives float seconds -> ms in one step; bc is not guaranteed present
-    v=$( { /usr/bin/env bash -c "time bash -c '${RUN[$lang]}' >/dev/null 2>&1" ; } 2>&1 \
-        | awk '/^real/ { print $2 }' \
-        | awk -F'm' '{ s=$1*60 + $2; printf "%.1f", s*1000 }' )
-    # skip the first timed round (cold cache) and any failure
-    if [[ -n "$v" && $i -gt 1 ]]; then
-      TIMES[$lang]+="$v "
-    fi
+  probe "${CMD[$lang]}" >/dev/null 2>&1 || true
+  for ((i = 1; i <= RUNS; i++)); do
+    v=$(probe "${CMD[$lang]}")
+    [[ -n "$v" ]] && SAMPLES[$lang]+="$v "
     echo "# $lang run $i: ${v:-FAILED}" >&2
   done
 done
 
-# ---- table -------------------------------------------------------------------
-# Wall-clock process timing is noisy: each invocation re-parses the 3MB /
-# 289k-entry signature dataset, and cold kernel/disk cache makes the first
-# run of any language 10-100x slower. We drop the cold run and report the
-# median, which is robust to the remaining tail.
-median() { # space-separated numbers -> median
-  # both printf calls need '%s\n'; a bare '%s' makes wc -l return 0 and the
-  # awk median silently divides by zero
-  printf '%s\n' $1 | sort -n | awk -v n="$(printf '%s\n' $1 | wc -l)" \
-    '{a[NR]=$1} END { if (n%2==1) print a[(n+1)/2]; else printf "%.1f", (a[n/2]+a[n/2+1])/2 }'
+# n mean stdev p50 p90 p99 cv — awk, because bc is not guaranteed present
+# the input arrives as a single space-separated string; split it here rather
+# than relying on awk field-splitting, which would treat it as one record
+stats() {
+  [[ -z "$1" ]] && { echo "0 - - - - - -"; return; }
+  printf '%s\n' $1 | sort -n | awk '
+    function ceil(x) { return (x == int(x)) ? x : int(x) + 1 }
+    { a[NR] = $1 + 0; s += $1 + 0; n++ }
+    END {
+      if (n == 0) { print "0 - - - - - -"; exit }
+      mean = s / n
+      for (i = 1; i <= n; i++) { d = a[i] - mean; ss += d * d }
+      sd = (n > 1) ? sqrt(ss / (n - 1)) : 0
+      k = int(ceil(0.50 * n)); p50 = a[k]
+      k = int(ceil(0.90 * n)); p90 = a[k]
+      k = int(ceil(0.99 * n)); p99 = a[k]
+      printf "%d %.1f %.1f %.1f %.1f %.1f %.1f\n", n, mean, sd, p50, p90, p99, (mean ? 100 * sd / mean : 0)
+    }'
 }
 
 echo
-echo "## Latency — \`$MODE\` on \`$ADDR\`"
+echo "## Latency — \`${MODE}\` on \`${LABEL}\` — ${RUNS} warm runs"
 echo
-echo "| Implementation | Runs | Median (ms) | Min (ms) | Max (ms) |"
-echo "|---|---|---|---|---|"
-for lang in rust python go; do
-  vals=${TIMES[$lang]:-}
-  if [[ -z "$vals" ]]; then
-    echo "| $lang | 0 | — | — | — |"
-    continue
-  fi
-  # printf '%s\n' so wc -l counts runs; a bare %s gives 0 for every language
-  cnt=$(printf '%s\n' $vals | wc -l)
-  med=$(median "$vals")
-  min=$(printf '%s\n' $vals | sort -n | head -1)
-  max=$(printf '%s\n' $vals | sort -n | tail -1)
-  echo "| $lang | $cnt | ${med} | ${min} | ${max} |"
+echo "| Implementation | Runs | Mean (ms) | StdDev | P50 | P90 | P99 | CV |"
+echo "|---|---|---|---|---|---|---|---|"
+for lang in rust go python; do
+  read -r n mean sd p50 p90 p99 cv <<<"$(stats "${SAMPLES[$lang]:-}")"
+  [[ "$n" == "0" ]] && { echo "| $lang | 0 | — | — | — | — | — | — |"; continue; }
+  printf '| %-8s | %s | %.1f | %.1f | %.1f | %.1f | %.1f | %.0f%% |\n' \
+    "$lang" "$n" "$mean" "$sd" "$p50" "$p90" "$p99" "$cv"
 done
 echo
+echo "Wall-clock per invocation, the same clock a user sees. The cold first run"
+echo "of each language is discarded. \`CV\` is coefficient of variation — under"
+echo "~10% means the measurement is stable enough to trust the spread."

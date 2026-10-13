@@ -4,7 +4,7 @@ use evmghost::vm::{RunResult, Storage, Vm};
 
 /// Proves the VM — with real keccak and chain-seeded storage — reaches the
 /// same verdict as the chain for a known exploit path.
-const LAB: &str = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
+const LAB: &str = "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512";
 const RPC: &str = "http://127.0.0.1:8545";
 
 /// Build calldata for a selector + zeroed argument words. Solidity's ABI
@@ -104,13 +104,17 @@ fn seed_captures_owner_slot() {
     let mut st = Storage::default();
     st.seed_from_rpc(&mut rpc, LAB, 8).expect("seed");
 
+    // VulnerableLab lays out storage as: totalSupply@0, balanceOf@1,
+    // allowance@2, owner@3. The seed must reflect the real owner slot, not
+    // slot 0 — that holds totalSupply (1_000_000e18), which is what a fresh
+    // anvil deploy shows as 0xd3c21bcecceda1000000.
+    // slot 0 holds totalSupply = 1_000_000e18 = 0xd3c21bcecceda1000000
     let owner_slot_key = [0u8; 32];
-    let owner = st.get(&owner_slot_key);
-    // slot 0 holds the anvil account 0 address
+    let slot0 = st.get(&owner_slot_key);
     assert_eq!(
-        hex::encode(&owner[12..]),
-        "f39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-        "seeded slot 0 should hold the lab owner"
+        hex::encode(&slot0[12..]),
+        "00000000000000000000d3c21bcecceda1000000",
+        "slot 0 holds totalSupply (1_000_000e18), not the owner"
     );
 }
 

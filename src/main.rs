@@ -61,7 +61,12 @@ fn main() -> ExitCode {
 
     // --json selects a machine-readable report instead of the human form
     let json = extra.iter().any(|a| a == "--json");
-    let extra: Vec<String> = extra.into_iter().filter(|a| a != "--json").collect();
+    // --timings prints a per-stage latency table; only quick mode is instrumented
+    let timings = extra.iter().any(|a| a == "--timings");
+    let extra: Vec<String> = extra
+        .into_iter()
+        .filter(|a| a != "--json" && a != "--timings")
+        .collect();
 
     let mut rpc = build_rpc(&args[0]);
     let chain = match rpc.chain_id() {
@@ -94,7 +99,7 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        _ => match probe(&mut rpc, &chain, &addr, &mode, &extra) {
+        _ => match probe(&mut rpc, &chain, &addr, &mode, &extra, timings) {
             Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
                 println!("[FAIL] {e}");

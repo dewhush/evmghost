@@ -12,8 +12,29 @@ It exists because the interesting targets are closed-source. When the contract h
 
 ---
 
+## Performance — Rust / Go / Python
+
+The same `quick` pass runs in three stdlib ports against one `anvil` node,
+30 warm invocations each. Full methodology and the bug that had to be fixed
+first: [`BENCHMARK.md`](BENCHMARK.md).
+
+| Implementation | Runs | Mean (ms) | StdDev | P50 | P90 | P99 | CV |
+|---|---|---|---|---|---|---|---|
+| Go | 30 | 4.4 | 0.4 | **4.4** | 5.0 | 5.4 | 8% |
+| Rust | 30 | 5.5 | 0.5 | 5.4 | 6.1 | 6.7 | 10% |
+| Python | 30 | 12.6 | 1.1 | 12.3 | 13.1 | 16.2 | 8% |
+
+Coefficient of variation is 8–10% across the board, so the spread is a real
+signal. The honest read: **the `quick` pass is RPC-bound, not CPU-bound** —
+all three do ~13 round trips, and at P50 they sit within 3 ms of each other.
+Go and Rust separate by interpreter-free startup; Python pays ~3× purely for
+spin-up. Language choice does not move this workload.
+
+---
+
 ## Table of contents
 
+- [Performance — Rust / Go / Python](#performance--rust--go--python)
 - [Why bytecode-only](#why-bytecode-only)
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -161,25 +182,27 @@ Validated against live mainnet contracts with **zero false positives**:
 
 ## Cross-language benchmark
 
-The same pipeline exists in three languages — Rust (this binary), Python
-(`bench/evmghost.py`, stdlib only), and Go (`bench/evmghost.go`, stdlib only)
-— all reading the same bytecode and the same 289,074-selector dataset. The
-comparison is in [`BENCHMARK.md`](BENCHMARK.md).
+The same pipeline exists in three languages — Rust (this binary), Go
+(`bench/evmghost.go`, stdlib only), and Python (`bench/evmghost.py`, stdlib
+only) — all reading the same bytecode and the same 289,074-selector dataset.
+Every port emits an identical stage table, so one harness times all three by
+the same clock and the same definition of a run.
 
 ```bash
-./bench/run.sh <RPC_URL> <ADDRESS> quick 7
+./bench/run.sh <RPC_URL> <ADDRESS> quick 30
 ```
 
-Local `anvil` node, no rate-limiting, seven warm runs per language:
+Local `anvil` node, no rate-limiting, 30 warm runs per language:
 
-| Implementation | Median (ms) | Min (ms) | Max (ms) |
-|---|---|---|---|
-| **Rust** | **9** | 8 | 10 |
-| Go | 71 | 70 | 73 |
-| Python | 220 | 215 | 262 |
+| Implementation | Runs | Mean (ms) | StdDev | P50 | P90 | P99 | CV |
+|---|---|---|---|---|---|---|---|
+| Go | 30 | 4.4 | 0.4 | **4.4** | 5.0 | 5.4 | 8% |
+| Rust | 30 | 5.5 | 0.5 | 5.4 | 6.1 | 6.7 | 10% |
+| Python | 30 | 12.6 | 1.1 | 12.3 | 13.1 | 16.2 | 8% |
 
-Rust is ~8× Go and ~3× Python, and the entire spread is process startup and
-connection handling — the CPU-bound work is sub-millisecond in all three.
+CV is 8–10% across all three, so the spread is a real signal rather than
+measurement noise. **The pass is RPC-bound**: ~13 round trips, and all three
+languages land within 3 ms of each other at the median.
 
 **The benchmark had to be fixed before it measured anything, and the bug it
 exposed is the most useful thing in it.** The first run reported Go 8× faster
@@ -187,11 +210,12 @@ than Rust. That was two bugs: a shell `median()` helper that silently divided
 by zero, and Go's default `http.Transport` pooling only 2 idle connections per
 host — so six concurrent goroutines starved and the "concurrent" port ran
 170× slower than Python's sequential loop. Sizing the pool to the fan-out
-dropped the Go pass from 1103 ms to 71 ms.
+took the Go pass from 1103 ms to 4.4 ms.
 
 The generalisable lesson: **concurrency without a matching connection pool is
-not a missed optimisation, it is an active regression.** Full methodology,
-both bugs, and the corrected analysis are in [`BENCHMARK.md`](BENCHMARK.md).
+not a missed optimisation, it is an active regression.** Full statistics,
+both bugs, and the corrected analysis are in
+[`BENCHMARK.md`](BENCHMARK.md).
 
 ## Limitations
 
