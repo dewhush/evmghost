@@ -84,5 +84,5 @@ Validated against live mainnet contracts with zero false positives:
   `ponytail:` in `vm.rs`.
 - `eth_getLogs` over wide ranges is rate-limited on public endpoints.
 
-[Unreleased]: https://github.com/0xDew/evmghost/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/0xDew/evmghost/releases/tag/v0.1.0
+[Unreleased]: https://github.com/dewhush/evmghost/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/dewhush/evmghost/releases/tag/v0.1.0
