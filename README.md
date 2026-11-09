@@ -2,9 +2,9 @@
 
 > Ghost through EVM bytecode. Detect access-control bugs on smart contracts with **no source code, no ABI, and no Solidity compiler** — bytecode-only.
 
-[![binary size](https://img.shields.io/badge/binary-5.9MB_static-black)](#)
-[![tests](https://img.shields.io/badge/tests-41%2F41%20pass-success)](#)
-[![no keys needed](https://img.shields.io/badge/auth-read--only%20JSON--RPC-informational)](#)
+[![CI](https://github.com/dewhush/evmghost/actions/workflows/ci.yml/badge.svg)](https://github.com/dewhush/evmghost/actions/workflows/ci.yml)
+[![binary size](https://img.shields.io/badge/binary-5.9MB_static-black)](https://github.com/dewhush/evmghost/releases)
+[![no keys needed](https://img.shields.io/badge/auth-read--only%20JSON--RPC-informational)](SECURITY.md)
 
 `evmghost` is a bytecode-first reconnaissance tool for auditors, bug-bounty hunters, and security researchers. It fingerprints deployed smart contracts directly from `eth_getCode`, follows **delegatecall proxy stacks** (EIP-1967 / EIP-1822 / beacons / clones / diamonds), fingerprints every 4-byte selector, replays candidate exploits in a **built-in EVM**, and decodes on-chain events — all from one static binary against any JSON-RPC node.
 
@@ -66,7 +66,7 @@ Source code is not the ground truth. **Bytecode is.** A verified Etherscan sourc
 ## Install
 
 ```bash
-git clone https://github.com/0xDew/evmghost.git
+git clone https://github.com/dewhush/evmghost.git
 cd evmghost
 cargo build --release
 # → target/release/evmghost
